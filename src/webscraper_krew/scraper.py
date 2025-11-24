@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from collections import deque
 from pathlib import Path
 from typing import List
-from urllib.parse import urljoin, urldefrag
+from urllib.parse import urljoin, urldefrag, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -22,6 +22,7 @@ class Config:
     output_path: Path = Path("output/links.jsonl")
     crawl_depth: int = 0
     request_delay: float = 1.0
+    max_pages: int = 50
 
 
 @dataclass
@@ -72,6 +73,13 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     if request_delay < 0:
         raise ValueError("Config request_delay must be zero or positive")
 
+    try:
+        max_pages = int(data.get("max_pages", 50))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Config max_pages must be an integer") from exc
+    if max_pages <= 0:
+        raise ValueError("Config max_pages must be a positive integer")
+
     return Config(
         user_agent=user_agent,
         http_timeout=http_timeout,
@@ -79,6 +87,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         output_path=output_path,
         crawl_depth=crawl_depth,
         request_delay=request_delay,
+        max_pages=max_pages,
     )
 
 
@@ -90,8 +99,8 @@ def fetch_html(url: str, config: Config) -> str:
     return response.text
 
 
-def extract_links(html: str, base_url: str, depth: int) -> List[LinkRecord]:
-    """Return list of link records found in anchor tags."""
+def extract_links(html: str, base_url: str, depth: int, allowed_netloc: str | None) -> List[LinkRecord]:
+    """Return list of link records found in anchor tags, limited to allowed domain when provided."""
     soup = BeautifulSoup(html, "html.parser")
     links: List[LinkRecord] = []
     for anchor in soup.find_all("a", href=True):
@@ -99,21 +108,31 @@ def extract_links(html: str, base_url: str, depth: int) -> List[LinkRecord]:
         href = anchor["href"]
         resolved = urljoin(base_url, href)
         cleaned, _ = urldefrag(resolved)
-        if cleaned.startswith(("http://", "https://")):
-            links.append(LinkRecord(source_url=base_url, text=text, href=cleaned, depth=depth))
+        if not cleaned.startswith(("http://", "https://")):
+            continue
+        link_netloc = urlparse(cleaned).netloc.lower()
+        if allowed_netloc and link_netloc != allowed_netloc:
+            continue
+        links.append(LinkRecord(source_url=base_url, text=text, href=cleaned, depth=depth))
     return links
 
 
 def scrape(url: str, config: Config) -> List[LinkRecord]:
     """High-level scraper: fetch page and extract links with optional breadth-first crawling."""
     start_url = urldefrag(url)[0]
+    start_netloc = urlparse(start_url).netloc.lower()
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
     visited = {start_url}
     records: List[LinkRecord] = []
     is_first_request = True
+    pages_fetched = 0
 
     while queue:
         current_url, depth = queue.popleft()
+        if pages_fetched >= config.max_pages:
+            logging.info("Reached max_pages limit (%s); stopping crawl.", config.max_pages)
+            break
+
         if not is_first_request and config.request_delay > 0:
             time.sleep(config.request_delay)
 
@@ -124,8 +143,9 @@ def scrape(url: str, config: Config) -> List[LinkRecord]:
             continue
 
         is_first_request = False
+        pages_fetched += 1
 
-        links = extract_links(html, current_url, depth)
+        links = extract_links(html, current_url, depth, start_netloc)
         records.extend(links)
 
         if depth >= config.crawl_depth:
@@ -133,6 +153,9 @@ def scrape(url: str, config: Config) -> List[LinkRecord]:
 
         next_depth = depth + 1
         for link in links:
+            link_netloc = urlparse(link.href).netloc.lower()
+            if link_netloc != start_netloc:
+                continue
             if link.href not in visited:
                 visited.add(link.href)
                 queue.append((link.href, next_depth))

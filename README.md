@@ -29,7 +29,8 @@ All runtime settings live in a JSON config file (default: `config/config.json`):
   "log_level": "INFO",
   "output_path": "output/links.jsonl",
   "crawl_depth": 0,
-  "request_delay": 1.0
+  "request_delay": 1.0,
+  "max_pages": 50
 }
 ```
 - `user_agent`: string sent with each request.
@@ -38,6 +39,8 @@ All runtime settings live in a JSON config file (default: `config/config.json`):
 - `output_path`: where scraped links are written as JSONL.
 - `crawl_depth`: breadth-first crawl depth (0 = only the start URL, 1 = follow its links once, etc.).
 - `request_delay`: seconds to sleep between requests (global, applies across depths).
+- `max_pages`: maximum pages to fetch per run (hard cap across depths).
+- The crawler only records and follows links on the same domain as the start URL.
 
 ## Project Structure
 - `src/webscraper_krew/scraper.py` — CLI entry point and scraping logic.

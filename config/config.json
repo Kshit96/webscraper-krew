@@ -3,6 +3,7 @@
   "http_timeout": 10,
   "log_level": "INFO",
   "output_path": "output/links.jsonl",
-  "crawl_depth": 0,
-  "request_delay": 1.0
+  "crawl_depth": 1,
+  "request_delay": 1.0,
+  "max_pages": 50
 }
