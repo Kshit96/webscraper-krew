@@ -3,6 +3,7 @@
   "http_timeout": 10,
   "log_level": "INFO",
   "output_path": "output/links.jsonl",
+  "author_output_path": "output/authors.jsonl",
   "crawl_depth": 1,
   "request_delay": 1.0,
   "max_pages": 50

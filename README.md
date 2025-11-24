@@ -19,6 +19,7 @@ python -m webscraper_krew.scraper "https://example.com"
 python -m webscraper_krew.scraper "https://example.com" --config path/to/config.json
 ```
 The scraper writes structured results as JSON Lines (one JSON object per line) to the configured output path, including `source_url`, `text`, `href`, and `depth`.
+Quotes include quote text, author, tags; authors are written separately to `author_output_path` with bio details when available.
 
 ## Configuration
 All runtime settings live in a JSON config file (default: `config/config.json`):
@@ -27,7 +28,8 @@ All runtime settings live in a JSON config file (default: `config/config.json`):
   "user_agent": "webscraper-krew/0.1 (+https://example.com)",
   "http_timeout": 10,
   "log_level": "INFO",
-  "output_path": "output/links.jsonl",
+  "quotes_output_path": "output/quotes.jsonl",
+  "author_output_path": "output/authors.jsonl",
   "crawl_depth": 0,
   "request_delay": 1.0,
   "max_pages": 50
@@ -36,7 +38,8 @@ All runtime settings live in a JSON config file (default: `config/config.json`):
 - `user_agent`: string sent with each request.
 - `http_timeout`: request timeout in seconds.
 - `log_level`: one of DEBUG, INFO, WARNING, ERROR.
-- `output_path`: where scraped links are written as JSONL.
+- `quotes_output_path`: where scraped quotes are written as JSONL.
+- `author_output_path`: where author records are written as JSONL.
 - `crawl_depth`: breadth-first crawl depth (0 = only the start URL, 1 = follow its links once, etc.).
 - `request_delay`: seconds to sleep between requests (global, applies across depths).
 - `max_pages`: maximum pages to fetch per run (hard cap across depths).
