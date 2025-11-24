@@ -1,0 +1,8 @@
+{
+  "user_agent": "webscraper-krew/0.1 (+https://example.com)",
+  "http_timeout": 10,
+  "log_level": "INFO",
+  "output_path": "output/links.jsonl",
+  "crawl_depth": 0,
+  "request_delay": 1.0
+}
