@@ -1,10 +1,20 @@
 {
-  "user_agent": "webscraper-krew/0.1 (+https://example.com)",
+  "user_agent": "webscraper-krew/0.1 (+https://quotes.toscrape.com)",
   "http_timeout": 10,
   "log_level": "INFO",
-  "output_path": "output/links.jsonl",
+  "quotes_output_path": "output/quotes.jsonl",
   "author_output_path": "output/authors.jsonl",
-  "crawl_depth": 1,
-  "request_delay": 1.0,
-  "max_pages": 50
+  "crawl_depth": 10,
+  "request_delay": 0.5,
+  "max_pages": 220,
+  "skip_keywords": [
+    "login",
+    "signin",
+    "signup",
+    "search",
+    "admin"
+  ],
+  "max_retries": 1,
+  "include_patterns": [],
+  "auto_increment_collection": true
 }
