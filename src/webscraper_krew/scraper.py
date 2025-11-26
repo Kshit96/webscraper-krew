@@ -12,6 +12,7 @@ import math
 import re
 import time
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 from urllib.parse import urljoin, urldefrag, urlparse, urlunparse
@@ -20,16 +21,38 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from .models import DEFAULT_CONFIG_PATH, AuthorRecord, Config, QuoteContext, QuoteRecord
+from .context_factory import QuoteContextFactory
+from .features import (
+    build_mini_embedding,
+    compute_text_features,
+    extract_top_keywords,
+    infer_emotion_label,
+    infer_structural_features,
+    infer_topic_label,
+)
+from .models import DEFAULT_CONFIG_PATH, AuthorRecord, Config, QuoteRecord
 from .pipeline import QuoteMetadataPipeline
 from .settings import load_config
-from .utils import (
-    _ordinal_suffix,
-    build_dedupe_key,
-    compute_quality_score,
-    detect_safety_flags,
-    slugify,
-)
+from .utils import _ordinal_suffix, build_dedupe_key, slugify
+
+__all__ = [
+    "scrape",
+    "write_quotes_jsonl",
+    "write_authors_jsonl",
+    "normalize_url",
+    "derive_page_number",
+    "extract_links",
+    "extract_quotes",
+    "extract_author_details",
+    "matches_include_patterns",
+    "compute_text_features",
+    "extract_top_keywords",
+    "build_mini_embedding",
+    "infer_topic_label",
+    "infer_emotion_label",
+    "infer_structural_features",
+    "build_author_lookup",
+]
 
 
 def normalize_url(url: str) -> str:
@@ -96,6 +119,7 @@ def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | No
         quote_text = (block.find("span", class_="text").get_text() if block.find("span", class_="text") else "").strip()
         author = (block.find("small", class_="author").get_text() if block.find("small", class_="author") else "").strip()
         tags = [tag.get_text().strip() for tag in block.find_all("a", class_="tag")]
+        node_lang = block.get("lang") or (block.find("span", class_="text").get("lang") if block.find("span", class_="text") else None)
         if quote_text:
             quotes.append(
                 QuoteRecord(
@@ -106,7 +130,8 @@ def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | No
                     depth=depth,
                     page_number=page_number,
                     position_on_page=idx,
-                    language_hint=language_hint,
+                    source_html_lang=language_hint,
+                    source_node_lang=node_lang,
                 )
             )
     return quotes
@@ -193,243 +218,6 @@ def load_existing_records(path: Path) -> List[dict]:
             except json.JSONDecodeError:
                 continue
     return records
-
-
-def compute_text_features(text: str) -> Dict[str, object]:
-    """Compute lightweight text features for AI enrichment (counts, flags, language guess)."""
-    normalized_text = " ".join(text.split())
-    quote_normalized = normalized_text.replace("“", '"').replace("”", '"').replace("’", "'")
-    words = normalized_text.split()
-    word_count = len(words)
-    char_count = len(normalized_text)
-    token_count = len(re.findall(r"\S+", normalized_text))
-    avg_word_length = (sum(len(w) for w in words) / word_count) if word_count else 0
-    ascii_ratio = sum(1 for c in normalized_text if c.isascii()) / max(len(normalized_text), 1)
-    language = "en" if ascii_ratio > 0.8 else "unknown"
-    language_confidence = round(ascii_ratio, 3)
-    has_punctuation_issues = ascii_ratio < 0.7 or any(ord(c) < 32 for c in normalized_text if c not in "\n\t\r")
-    has_ellipsis = "..." in normalized_text or "… " in normalized_text
-    has_question_mark = "?" in normalized_text
-    has_exclamation_mark = "!" in normalized_text
-
-    return {
-        "normalized_text": normalized_text.lower(),
-        "quote_normalized": quote_normalized,
-        "word_count": word_count,
-        "char_count": char_count,
-        "token_count": token_count,
-        "avg_word_length": avg_word_length,
-        "language": language,
-        "language_confidence": language_confidence,
-        "has_punctuation_issues": has_punctuation_issues,
-        "has_ellipsis": has_ellipsis,
-        "has_question_mark": has_question_mark,
-        "has_exclamation_mark": has_exclamation_mark,
-    }
-
-
-def build_mini_embedding(text: str, dims: int = 16) -> List[float]:
-    """Tiny deterministic embedding via hashing; suitable as a PoC vector."""
-    digest = hashlib.sha1(text.encode("utf-8")).digest()
-    while len(digest) < dims * 2:
-        digest += hashlib.sha1(digest).digest()
-    vec: List[float] = []
-    for i in range(dims):
-        segment = digest[i * 2 : i * 2 + 2]
-        val = int.from_bytes(segment, "big", signed=False) / 65535.0
-        vec.append(round(val, 6))
-    return vec
-
-
-STOPWORDS = {
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "in",
-    "on",
-    "to",
-    "for",
-    "with",
-    "at",
-    "by",
-    "from",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "it",
-    "this",
-    "that",
-    "as",
-    "but",
-    "if",
-    "into",
-    "about",
-    "than",
-    "then",
-    "so",
-    "very",
-    "too",
-    "can",
-    "will",
-    "would",
-    "could",
-    "should",
-}
-
-
-def normalize_tags(tags: List[str]) -> List[str]:
-    """Lowercase, slugify, and dedupe tags preserving order."""
-    seen = set()
-    normalized: List[str] = []
-    for tag in tags:
-        slug = slugify(tag)
-        if slug and slug not in seen:
-            seen.add(slug)
-            normalized.append(slug)
-    return normalized
-
-
-def extract_top_keywords(text: str, tags: List[str], limit: int = 5) -> List[str]:
-    """Simple keyword extraction: combine tags + top non-stopword tokens by length/frequency."""
-    tokens = re.findall(r"[a-zA-Z][a-zA-Z'-]+", text.lower())
-    freq: Dict[str, int] = {}
-    for tok in tokens:
-        if tok in STOPWORDS:
-            continue
-        freq[tok] = freq.get(tok, 0) + 1
-    sorted_tokens = sorted(freq.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))
-    keywords = [t for t, _ in sorted_tokens[: limit - len(tags)]]
-    combined = []
-    seen = set()
-    for candidate in tags + keywords:
-        slug = slugify(candidate)
-        if slug and slug not in seen:
-            seen.add(slug)
-            combined.append(slug)
-        if len(combined) >= limit:
-            break
-    return combined
-
-
-def infer_topic_label(text: str, tags: List[str]) -> str:
-    """Heuristic topic labeling based on keywords."""
-    haystack = (text + " " + " ".join(tags)).lower()
-    topic_keywords = {
-        "love": ["love", "heart"],
-        "life": ["life", "living"],
-        "success": ["success", "achievement"],
-        "philosophy": ["truth", "mind", "thought"],
-        "humor": ["funny", "humor", "laugh"],
-        "friendship": ["friend", "friends", "friendship"],
-        "inspiration": ["inspire", "inspiration", "dream", "hope"],
-    }
-    for topic, keys in topic_keywords.items():
-        if any(key in haystack for key in keys):
-            return topic
-    return "general"
-
-
-def infer_emotion_label(text: str) -> str:
-    """Very light sentiment-like guess using keyword cues."""
-    lower = text.lower()
-    positive = ["love", "hope", "joy", "happy", "beauty", "dream"]
-    negative = ["fear", "sad", "hate", "pain", "anger"]
-    if any(word in lower for word in positive):
-        return "positive"
-    if any(word in lower for word in negative):
-        return "negative"
-    return "neutral"
-
-
-def infer_structural_features(text: str, tags: List[str]) -> Dict[str, object]:
-    """Infer simple structural/role labels from text."""
-    lower = text.lower()
-    quote_type = infer_quote_type(text, tags)
-    perspective = infer_perspective(lower)
-    tense = infer_tense(lower)
-    named_entities = extract_named_entities(text)
-    contains_named_entities = bool(named_entities)
-    return {
-        "quote_type": quote_type,
-        "perspective": perspective,
-        "tense": tense,
-        "contains_named_entities": contains_named_entities,
-        "named_entities": named_entities,
-    }
-
-
-def infer_quote_type(text: str, tags: List[str]) -> str:
-    """Heuristic quote type."""
-    lower = text.lower()
-    haystack = lower + " " + " ".join(tags).lower()
-    mapping = {
-        "humorous": ["funny", "humor", "laugh", "ridiculous"],
-        "inspirational": ["inspire", "dream", "hope", "believe"],
-        "philosophical": ["truth", "thought", "mind", "reality"],
-        "motivational": ["success", "achieve", "do it", "keep", "never give up"],
-    }
-    for label, cues in mapping.items():
-        if any(cue in haystack for cue in cues):
-            return label
-    if "love" in haystack:
-        return "inspirational"
-    return "general"
-
-
-def infer_perspective(lower_text: str) -> str:
-    """Heuristic person perspective."""
-    first = {" i ", " my ", " mine ", " we ", " our ", " us "}
-    second = {" you ", " your ", " yours "}
-    third = {" he ", " she ", " they ", " him ", " her ", " them ", " his ", " hers ", " theirs "}
-    padded = f" {lower_text} "
-    if any(tok in padded for tok in first):
-        return "first_person"
-    if any(tok in padded for tok in second):
-        return "second_person"
-    if any(tok in padded for tok in third):
-        return "third_person"
-    return "unspecified"
-
-
-def infer_tense(lower_text: str) -> str:
-    """Rough tense guess."""
-    if re.search(r"\bwill\b|\bgoing to\b", lower_text):
-        return "future"
-    if re.search(r"\b(ed|was|were)\b", lower_text):
-        return "past"
-    return "present"
-
-
-def extract_named_entities(text: str) -> List[Dict[str, str]]:
-    """Simple capitalized-word entity grabber as a placeholder."""
-    candidates = re.findall(r"\b[A-Z][a-zA-Z']+\b", text)
-    entities = []
-    seen = set()
-    for cand in candidates:
-        key = cand.lower()
-        if key not in seen:
-            seen.add(key)
-            entities.append({"type": "UNKNOWN", "text": cand})
-    return entities
-
-
-def determine_parse_status(text_features: Dict[str, object]) -> str:
-    """Classify parse outcome."""
-    if text_features["word_count"] == 0:
-        return "failed"
-    if text_features["has_punctuation_issues"]:
-        return "partial"
-    return "ok"
-
-
-def make_document_id(source_url: str) -> str:
-    """Stable document ID from source URL."""
-    return hashlib.sha1(source_url.encode("utf-8")).hexdigest()
 
 
 def apply_sequence_links(payloads: List[dict]) -> None:
@@ -555,57 +343,12 @@ def write_quotes_jsonl(
 
     pipeline = QuoteMetadataPipeline.default()
     resolved_collection = resolve_collection_name(collection_name, auto_increment, existing)
+    factory = QuoteContextFactory(start_url, scraped_at, resolved_collection, author_lookup, dedupe_counts)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for record in quotes:
-            text_features = compute_text_features(record.quote)
-            if record.language_hint and record.language_hint != "unknown":
-                text_features["language"] = record.language_hint
-                text_features["language_confidence"] = 1.0
-            tags_normalized = normalize_tags(record.tags)
-            source_site = urlparse(record.source_url).netloc
-            embedding = build_mini_embedding(text_features["normalized_text"])
-            top_keywords = extract_top_keywords(text_features["normalized_text"], record.tags)
-            topic_label = infer_topic_label(text_features["normalized_text"], record.tags)
-            emotion_label = infer_emotion_label(text_features["normalized_text"])
-            structural = infer_structural_features(record.quote, record.tags)
-            dedupe_key = build_dedupe_key(text_features["normalized_text"])
-            is_duplicate = dedupe_counts.get(dedupe_key, 0) > 0
-            dedupe_counts[dedupe_key] = dedupe_counts.get(dedupe_key, 0) + 1
-            source_confidence = 0.6 if text_features["has_punctuation_issues"] else 1.0
-            parse_status = determine_parse_status(text_features)
-            quality_score = compute_quality_score(text_features)
-            safety_flags = detect_safety_flags(text_features["normalized_text"])
-            document_id = make_document_id(record.source_url)
-            author_meta = author_lookup.get(record.author, {})
-            primary_tag = record.tags[0] if record.tags else None
-            secondary_tags = record.tags[1:] if len(record.tags) > 1 else []
-            ctx = QuoteContext(
-                record=record,
-                author_meta=author_meta,
-                text_features=text_features,
-                structural=structural,
-                dedupe_key=dedupe_key,
-                is_duplicate=is_duplicate,
-                source_confidence=source_confidence,
-                parse_status=parse_status,
-                quality_score=quality_score,
-                safety_flags=safety_flags,
-                embedding=embedding,
-                top_keywords=top_keywords,
-                topic_label=topic_label,
-                emotion_label=emotion_label,
-                document_id=document_id,
-                collection_name=resolved_collection,
-                scraped_at=scraped_at,
-                start_url=start_url,
-                source_site=source_site,
-                tags_normalized=tags_normalized,
-                tags_count=len(record.tags),
-                primary_tag=primary_tag,
-                secondary_tags=secondary_tags,
-            )
+            ctx = factory.build(record)
             merged[(record.quote, record.author)] = pipeline.build(ctx)
 
         payloads = list(merged.values())
@@ -735,7 +478,8 @@ def scrape(url: str, config: Config) -> tuple[List[QuoteRecord], List[AuthorReco
         fetched_pages.add(current_url)
 
         links = extract_links(html, current_url, start_netloc)
-        doc_lang = detect_language_from_html(html) or fallback_detect_language(html)
+        # Prefer document-declared language; only fall back to later heuristics if missing.
+        doc_lang = detect_language_from_html(html)
         page_quotes = extract_quotes(html, current_url, depth, doc_lang)
         author_details = extract_author_details(html, current_url, depth)
         quotes.extend(page_quotes)
@@ -782,21 +526,9 @@ def main() -> None:
     author_lookup = build_author_lookup(authors, config.author_output_path)
 
     if not quotes and not authors:
-        logging.info(
-            "No quotes or authors found. Writing empty outputs to %s and %s",
-            config.quotes_output_path,
-            config.author_output_path,
+        logging.warning(
+            "No quotes or authors found; leaving existing output files untouched."
         )
-        write_quotes_jsonl(
-            [],
-            config.quotes_output_path,
-            args.url,
-            scraped_at,
-            author_lookup,
-            config.collection_name,
-            config.auto_increment_collection,
-        )
-        write_authors_jsonl([], config.author_output_path, args.url, scraped_at)
         return
 
     write_quotes_jsonl(

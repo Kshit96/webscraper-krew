@@ -2,7 +2,7 @@
 
 Minimal Python starter for crawling a site, collecting quotes and author details.
 
-## Setup
+## Quickstart
 - Python 3.10+ recommended.
 - Create a virtual environment and install dependencies:
   ```bash
@@ -10,20 +10,16 @@ Minimal Python starter for crawling a site, collecting quotes and author details
   source .venv/bin/activate
   pip install -r requirements.txt
   ```
-
-## Usage
-Run the scraper against a target URL:
-```bash
-PYTHONPATH=src python -m src.webscraper_krew.scraper "https://example.com"
-# optionally point to another config file
-PYTHONPATH=src python -m src.webscraper_krew.scraper "https://example.com" --config path/to/config.json
-```
-The scraper writes structured results as JSON Lines (one JSON object per line). Quotes include text, author, tags plus metadata (`start_url`, `scraped_at`, `fetched_at`, `depth`, `word_count`, `char_count`, `tags_count`, `language`, `content_type`, `estimated_read_time_seconds`); authors are written separately to `author_output_path` with bio details and the same style of metadata.
-
-Runs are idempotent: existing quote/author JSONL files are merged by key (quote+author for quotes, source_url for authors), so reruns update/replace records rather than appending duplicates.
+- Run the scraper:
+  ```bash
+  PYTHONPATH=src python -m src.webscraper_krew.scraper "https://example.com"
+  # or with a custom config
+  PYTHONPATH=src python -m src.webscraper_krew.scraper "https://example.com" --config path/to/config.json
+  ```
+- Outputs: JSONL files at `quotes_output_path` and `author_output_path` (configurable). Runs are idempotent (merge on quote+author or source_url).
 
 ## Configuration
-All runtime settings live in a JSON config file (default: `config/config.json`):
+Defaults in `config/config.json`:
 ```json
 {
   "user_agent": "webscraper-krew/0.1 (+https://example.com)",
@@ -40,52 +36,55 @@ All runtime settings live in a JSON config file (default: `config/config.json`):
   "auto_increment_collection": true
 }
 ```
-- `user_agent`: string sent with each request.
-- `http_timeout`: request timeout in seconds.
-- `log_level`: one of DEBUG, INFO, WARNING, ERROR.
-- `quotes_output_path`: where scraped quotes are written as JSONL.
-- `author_output_path`: where author records are written as JSONL.
-- `crawl_depth`: breadth-first crawl depth (0 = only the start URL, 1 = follow its links once, etc.).
-- `request_delay`: seconds to sleep between requests (global, applies across depths).
-- `max_pages`: maximum pages to fetch per run (hard cap across depths).
-- `skip_keywords`: skip URLs containing these keywords in path/query (e.g., login or search pages).
-- `max_retries`: number of retries per URL on request/HTTP errors.
-- `include_patterns`: only enqueue/fetch URLs matching these regex patterns (empty = allow all).
-- `auto_increment_collection`: when true, bump collection version automatically across runs.
-- The crawler only follows links on the same domain as the start URL.
-
-## Extending Metadata (QuoteMetadataPipeline)
-- Metadata for quotes is assembled by `QuoteMetadataPipeline` in `src/webscraper_krew/scraper.py`. To add your own fields:
-  1. Write a processor function with signature `def my_processor(ctx: QuoteContext) -> dict` that returns a dict of new fields. `QuoteContext` exposes the parsed quote record plus derived features (text_features, structural info, author metadata, etc.).
-  2. Register it in `QuoteMetadataPipeline.default()` (append to the processors list), or create a custom pipeline and replace the default call in `write_quotes_jsonl`.
-  3. Ensure keys you emit do not collide with existing ones unless you intend to overwrite.
-  Example:
-  ```python
-  def add_uppercase_quote(ctx: QuoteContext) -> dict:
-      return {"quote_upper": ctx.record.quote.upper()}
-
-  # inside QuoteMetadataPipeline.default():
-  return cls([...existing..., add_uppercase_quote])
-  ```
+- `crawl_depth`, `request_delay`, `max_pages`, `skip_keywords`, `include_patterns`: control crawl scope and politeness.
+- Only same-domain links are followed.
 
 ## Project Structure
-- `src/webscraper_krew/main.py` — preferred CLI entry point: loads config, runs scrape, writes outputs.
-- `src/webscraper_krew/scraper.py` — crawl, extraction, enrichment, and writing logic.
-- `src/webscraper_krew/models.py` — dataclasses for config, records, and context.
+- `src/webscraper_krew/main.py` — CLI entry; loads config, runs scrape, writes outputs.
+- `src/webscraper_krew/scraper.py` — crawl, extraction, enrichment, writes JSONL.
+- `src/webscraper_krew/models.py` — dataclasses for config, records, context.
 - `src/webscraper_krew/settings.py` — config loading/validation.
-- `src/webscraper_krew/pipeline.py` — `QuoteMetadataPipeline` and default processors.
+- `src/webscraper_krew/pipeline.py` — `QuoteMetadataPipeline` (transforms context → payload).
+- `src/webscraper_krew/context_factory.py` — builds `QuoteContext` from raw quotes + author lookup.
 - `src/webscraper_krew/utils.py` — shared helpers (quality, dedupe, slugify, etc.).
+- `analytics_dashboard.py` — Streamlit UI (control panel + analytics).
+- `requirements*.txt` — core and optional deps (NER, embeddings).
 - `config/config.json` — default runtime configuration.
-- `requirements.txt` — dependencies: `requests`, `beautifulsoup4`.
-- `.gitignore` — common Python ignores and virtualenv.
+
+### Optional extras
+- NER model (dslim/bert-base-NER): `pip install -r requirements-ner.txt` (fallback heuristic if absent).
+- Embeddings (MiniLM-L6 projected to 10D): `pip install -r requirements-embeddings.txt` (fallback hash embedding if absent).
 
 ## Docker (dashboard + in-UI scrape)
-- Build: `docker build -t webscraper-krew .`
-- Run the dashboard (mounting local output for live data):  
-  `docker run -p 8501:8501 -v "$(pwd)/output:/app/output" webscraper-krew`
-- Open http://localhost:8501 to view analytics and trigger scrapes via the UI control panel.
+- Build lean: `docker build -t webscraper-krew .`
+- Build with models: `docker build --build-arg EXTRAS="ner,embeddings" -t webscraper-krew:full .`
+- Run dashboard: `docker run -p 8501:8501 -v "$(pwd)/output:/app/output" webscraper-krew`
+- Run scraper via UI control panel inside dashboard; mount `output/` to persist.
 
-## Next Steps
-- Add parsing tailored to your target sites (e.g., article titles, metadata).
-- Layer in polite scraping practices: rate limiting, retries, and robots.txt checks.
-- Add tests (pytest) and CI once parsing logic grows.
+## Documentation (Short Write-Up)
+### Site chosen and why
+- `quotes.toscrape.com` — public demo site, predictable structure, safe for scraping and quick iteration.
+
+### How to run
+- Dependencies: `pip install -r requirements.txt` (optional: `requirements-ner.txt`, `requirements-embeddings.txt`).
+- Commands: `PYTHONPATH=src python -m src.webscraper_krew.scraper "http://quotes.toscrape.com" --config config/config.json`
+- Config: tweak crawl depth, delays, max_pages, include/skip patterns in `config/config.json` (or via dashboard control panel).
+- Docker: see commands above (lean vs. model-enabled builds).
+
+### Data schema (key fields)
+- Common: `id`, `type`, `source_url`, `start_url`, `source_site`, `collection_name`, `scraped_at`, `last_updated_at`, `dedupe_key`, `is_duplicate`, `parse_status`, `source_confidence`.
+- Quote-specific: `quote`, `author_name_raw`, `author_normalized_id`, `tags`, `tags_normalized`, `tags_count`, `primary_tag`, `secondary_tags`, `page_number`, `position_on_page`, `depth`, `document_id`, `chunk_id`, `chunk_index`.
+- Text/AI signals: `word_count`, `char_count`, `token_count`, `language`/`resolved_lang`, `language_confidence`, `normalized_text`, `quote_normalized`, `quality_score`, `safety_flags`, `topic_label`, `emotion_label`, `quote_type`, `perspective`, `tense`, `contains_named_entities`, `named_entities`, `top_keywords`, `embedding_vector` (hash or MiniLM PCA 10D), `embedding_model`.
+- Author-specific: `author_country`, `author_birth_year`, `author_death_year`, `author_era`, plus bios in author JSONL.
+
+### Design decisions
+- Pages to keep: same-domain links only; skip obvious non-content (login/search/admin) via `skip_keywords`; optional include_patterns for whitelisting.
+- Main content extraction: look for `.quote` blocks on the page (demo site structure), grabbing text, author, tags, page/position.
+- AI workflow support: normalize text/tags, dedupe keys, language signals, safety flags, topic/emotion/structural labels, embedding vector, chunk/document IDs, collection versioning for incremental updates. Authors carry country/era for richer filters.
+
+### Future Work
+- Scheduling + monitoring: cron/worker with retries, metrics, alerts, and per-run audit logs.
+- Cross-source dedupe: global dedupe keys across sites/domains.
+- Smarter extraction: model-based content extraction, better NER, improved topic/emotion classifiers.
+- Storage/indexing: push to a vector store and/or search index; versioned collections for A/B retrieval.
+- Politeness/compliance: robots.txt checks, per-domain rate limits, backoff, and user-agent rotation if needed.

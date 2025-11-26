@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -142,12 +143,15 @@ def main() -> None:
     st.sidebar.subheader("Filters")
     collection_filter = st.sidebar.text_input("Collection name", value="")
     tag_filter = st.sidebar.text_input("Tag contains", value="")
+    lang_filter = st.sidebar.text_input("Language (resolved_lang)", value="")
 
     df = quotes_df.copy()
     if collection_filter:
         df = df[df.get("collection_name", "") == collection_filter]
     if tag_filter:
         df = df[df["tags"].apply(lambda t: any(tag_filter.lower() in str(tag).lower() for tag in (t or [])))]
+    if lang_filter:
+        df = df[df.get("resolved_lang", df.get("language", "")).fillna("").str.lower() == lang_filter.lower()]
 
     st.subheader("Summary")
     col1, col2, col3, col4 = st.columns(4)
@@ -156,12 +160,15 @@ def main() -> None:
     col3.metric("Avg quality", f"{df['quality_score'].mean():.2f}" if "quality_score" in df else "n/a")
     col4.metric("Avg word count", f"{df['word_count'].mean():.1f}" if "word_count" in df else "n/a")
 
-    st.subheader("Top Tags")
-    tag_counts = Counter([tag for tags in df["tags"].dropna() for tag in tags])
-    st.bar_chart(pd.DataFrame(tag_counts.most_common(15), columns=["tag", "count"]).set_index("tag"))
+    if "tags" in df:
+        st.subheader("Top Tags")
+        tag_counts = Counter([tag for tags in df["tags"].dropna() for tag in tags])
+        st.bar_chart(pd.DataFrame(tag_counts.most_common(15), columns=["tag", "count"]).set_index("tag"))
 
-    st.subheader("Top Authors")
-    st.bar_chart(df["author"].value_counts().head(15))
+    author_col = "author_name_raw" if "author_name_raw" in df else "author"
+    if author_col in df:
+        st.subheader("Top Authors")
+        st.bar_chart(df[author_col].value_counts().head(15))
 
     if "topic_label" in df:
         st.subheader("Topics")
@@ -175,9 +182,44 @@ def main() -> None:
         st.subheader("Quote Type")
         st.bar_chart(df["quote_type"].value_counts())
 
-    st.subheader("Quality vs. Length")
-    if "quality_score" in df and "word_count" in df:
+    if "resolved_lang" in df or "language" in df:
+        lang_series = df.get("resolved_lang", df.get("language"))
+        st.subheader("Languages")
+        st.bar_chart(lang_series.value_counts())
+
+    if "language_confidence" in df:
+        st.subheader("Language Confidence")
+        st.line_chart(df["language_confidence"].reset_index(drop=True))
+
+    if "safety_flags" in df:
+        st.subheader("Safety Flags")
+        all_flags = [flag for flags in df["safety_flags"].dropna() for flag in flags]
+        st.bar_chart(pd.Series(all_flags).value_counts())
+
+    if "is_duplicate" in df:
+        st.subheader("Duplicate Ratio")
+        dup_ratio = df["is_duplicate"].mean()
+        st.metric("Duplicate ratio", f"{dup_ratio:.2%}")
+
+    if {"quality_score", "word_count"} <= set(df.columns):
+        st.subheader("Quality vs. Length")
         st.scatter_chart(df[["word_count", "quality_score"]])
+        st.subheader("Quality Score Distribution")
+        qs = df["quality_score"].dropna()
+        if not qs.empty:
+            counts, bins = np.histogram(qs, bins=10, range=(0, 1))
+            hist_df = pd.DataFrame(
+                {"bin": [f"{bins[i]:.2f}-{bins[i+1]:.2f}" for i in range(len(counts))], "count": counts}
+            ).set_index("bin")
+            st.bar_chart(hist_df)
+
+    if "author_country" in df:
+        st.subheader("Author Country")
+        st.bar_chart(df["author_country"].dropna().value_counts().head(20))
+
+    if "author_era" in df:
+        st.subheader("Author Era")
+        st.bar_chart(df["author_era"].dropna().value_counts())
 
     st.subheader("Raw Data")
     tab1, tab2 = st.tabs(["Quotes", "Authors"])

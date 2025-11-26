@@ -54,6 +54,11 @@ def estimate_read_time_seconds(word_count: int, wpm: int = 200) -> int:
     return int(math.ceil((word_count / wpm) * 60))
 
 
+def make_document_id(source_url: str) -> str:
+    """Stable document ID from source URL."""
+    return hashlib.sha1(source_url.encode("utf-8")).hexdigest()
+
+
 def _ordinal_suffix(n: int) -> str:
     """Return ordinal suffix for a positive integer (1 -> st, 2 -> nd, 3 -> rd, else th)."""
     if 10 <= n % 100 <= 20:

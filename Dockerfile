@@ -1,10 +1,12 @@
 # Build a self-contained image to run the scraper or analytics dashboard.
-# Usage:
+# Base build (lean, hash embeddings, heuristic NER):
 #   docker build -t webscraper-krew .
-#   # Scrape (mount output to persist):
+# Build with optional NER and/or MiniLM embeddings:
+#   docker build --build-arg EXTRAS="ner,embeddings" -t webscraper-krew:full .
+# Run scraper (mount output to persist):
 #   docker run --rm -e MODE=scrape -e TARGET_URL="https://quotes.toscrape.com" \
 #     -v "$(pwd)/output:/app/output" webscraper-krew
-#   # Dashboard:
+# Run dashboard:
 #   docker run --rm -p 8501:8501 -v "$(pwd)/output:/app/output" webscraper-krew
 #
 FROM python:3.13-slim
@@ -20,8 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+ARG EXTRAS=""
+
+COPY requirements*.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && \
+    if echo "$EXTRAS" | grep -qi "ner"; then pip install --no-cache-dir -r requirements-ner.txt; fi && \
+    if echo "$EXTRAS" | grep -qi "embeddings"; then pip install --no-cache-dir -r requirements-embeddings.txt; fi
 
 COPY src ./src
 COPY analytics_dashboard.py .

@@ -31,7 +31,8 @@ class QuoteRecord:
     depth: int
     page_number: int
     position_on_page: int
-    language_hint: str | None = None
+    source_html_lang: str | None = None
+    source_node_lang: str | None = None
 
 
 @dataclass
@@ -71,3 +72,8 @@ class QuoteContext:
     tags_count: int
     primary_tag: str | None
     secondary_tags: List[str]
+    source_html_lang: str | None = None
+    source_node_lang: str | None = None
+    detected_lang: str | None = None
+    detected_lang_confidence: float | None = None
+    resolved_lang: str | None = None
