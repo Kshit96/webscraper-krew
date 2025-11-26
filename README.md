@@ -79,7 +79,7 @@ Defaults in `config/config.json`:
 
 ## Documentation (Short Write-Up)
 ### Site chosen and why
-- `quotes.toscrape.com` — public demo site, predictable structure, safe for scraping and quick iteration.
+- `quotes.toscrape.com` — public demo site that explicitly permits ethical scraping, with predictable structure and rich textual content. It’s ideal for practicing extraction, enrichment (tags, authors, metadata), and AI-focused signals without policy concerns.
 
 ### How to run (deps, commands, config)
 - Dependencies: `pip install -r requirements.txt` (optional: `requirements-ner.txt` for NER, `requirements-embeddings.txt` for MiniLM).
