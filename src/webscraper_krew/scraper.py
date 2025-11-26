@@ -116,9 +116,16 @@ def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | No
     quotes: List[QuoteRecord] = []
     page_number = derive_page_number(page_url)
     for idx, block in enumerate(soup.find_all("div", class_="quote"), start=1):
-        quote_text = (block.find("span", class_="text").get_text() if block.find("span", class_="text") else "").strip()
-        author = (block.find("small", class_="author").get_text() if block.find("small", class_="author") else "").strip()
-        tags = [tag.get_text().strip() for tag in block.find_all("a", class_="tag")]
+        # Primary selectors
+        quote_node = block.find("span", class_="text") or block.find("q") or block.find("blockquote")
+        quote_text = (quote_node.get_text() if quote_node else "").strip()
+
+        author_node = block.find("small", class_="author") or block.find("span", class_="author") or block.find("a", rel="author")
+        author = (author_node.get_text() if author_node else "").strip()
+
+        tag_nodes = block.find_all("a", class_="tag") or block.find_all("span", class_="tag") or block.find_all("a", rel="tag")
+        tags = [tag.get_text().strip() for tag in tag_nodes]
+
         node_lang = block.get("lang") or (block.find("span", class_="text").get("lang") if block.find("span", class_="text") else None)
         if quote_text:
             quotes.append(
@@ -140,19 +147,18 @@ def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | No
 def extract_author_details(html: str, page_url: str, depth: int) -> AuthorRecord | None:
     """Extract author details from an author page if present."""
     soup = BeautifulSoup(html, "html.parser")
-    details = soup.find("div", class_="author-details")
-    if not details:
-        return None
+    details = soup.find("div", class_="author-details") or soup.find("article") or soup
 
-    name_el = details.find(["h3", "h1"], class_="author-title") or details.find(["h3", "h1"])
+    name_el = details.find(["h3", "h1"], class_="author-title") or details.find(["h3", "h1"]) or details.find("title")
     name = (name_el.get_text() if name_el else "").strip()
-    born_date_el = details.find(class_="author-born-date")
-    born_location_el = details.find(class_="author-born-location")
-    description_el = details.find("div", class_="author-description")
+    born_date_el = details.find(class_="author-born-date") or details.find(string=re.compile("Born", re.IGNORECASE))
+    born_location_el = details.find(class_="author-born-location") or details.find(string=re.compile("in "))
+    description_el = details.find("div", class_="author-description") or details.find("p")
 
-    born_date = (born_date_el.get_text() if born_date_el else "").strip()
-    born_location = (born_location_el.get_text() if born_location_el else "").strip()
-    description = (description_el.get_text() if description_el else "").strip()
+    # Clean text values
+    born_date = (born_date_el.get_text() if hasattr(born_date_el, "get_text") else (born_date_el or "")).strip()
+    born_location = (born_location_el.get_text() if hasattr(born_location_el, "get_text") else (born_location_el or "")).strip()
+    description = (description_el.get_text() if description_el and hasattr(description_el, "get_text") else (description_el or "")).strip()
 
     if not name:
         return None

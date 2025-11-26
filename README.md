@@ -59,7 +59,18 @@ Defaults in `config/config.json`:
 - Build lean: `docker build -t webscraper-krew .`
 - Build with models: `docker build --build-arg EXTRAS="ner,embeddings" -t webscraper-krew:full .`
 - Run dashboard: `docker run -p 8501:8501 -v "$(pwd)/output:/app/output" webscraper-krew`
-- Run scraper via UI control panel inside dashboard; mount `output/` to persist.
+- Run scraper via UI control panel inside the dashboard (container entrypoint is Streamlit); mount `output/` to persist.
+### Build/run matrix
+- Lean (no NER/embeddings):  
+  `docker build -t webscraper-krew .`
+- NER only:  
+  `docker build --build-arg EXTRAS="ner" -t webscraper-krew:ner .`
+- Embeddings only:  
+  `docker build --build-arg EXTRAS="embeddings" -t webscraper-krew:emb .`
+- NER + Embeddings:  
+  `docker build --build-arg EXTRAS="ner,embeddings" -t webscraper-krew:full .`
+- Run dashboard for any image (example for full):  
+  `docker run --rm -p 8501:8501 -v "$(pwd)/output:/app/output" webscraper-krew:full`
 
 ## Documentation (Short Write-Up)
 ### Site chosen and why
@@ -81,6 +92,10 @@ Defaults in `config/config.json`:
 - Pages to keep: same-domain links only; skip obvious non-content (login/search/admin) via `skip_keywords`; optional include_patterns for whitelisting.
 - Main content extraction: look for `.quote` blocks on the page (demo site structure), grabbing text, author, tags, page/position.
 - AI workflow support: normalize text/tags, dedupe keys, language signals, safety flags, topic/emotion/structural labels, embedding vector, chunk/document IDs, collection versioning for incremental updates. Authors carry country/era for richer filters.
+- Pipeline + Factory relationship:
+  - `context_factory.py` builds a `QuoteContext` (raw quote, author metadata, text/structural features, safety/dedupe signals).
+  - `pipeline.py` takes that context and emits the final JSON payload via small “builder” functions.
+  - Extensibility: add a builder `def my_fields(ctx: QuoteContext) -> dict` and register it in `QuoteMetadataPipeline.default()` (or create a custom pipeline). You can also extend `QuoteContextFactory` if you need to compute new signals from raw HTML before the pipeline runs.
 
 ### Future Work
 - Scheduling + monitoring: cron/worker with retries, metrics, alerts, and per-run audit logs.

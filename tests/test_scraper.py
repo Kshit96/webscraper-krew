@@ -5,8 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-import pytest
-
 from webscraper_krew import scraper as s
 
 
@@ -95,6 +93,37 @@ def test_extract_quotes_and_authors():
     assert author is not None
     assert author.name == "Jane Doe"
     assert author.born_location.endswith("Country")
+
+
+def test_extract_quotes_fallback_selectors():
+    html = """
+    <div class="quote" lang="en">
+      <blockquote>“Alt quote.”</blockquote>
+      <span class="author">Alt Author</span>
+      <a rel="tag">AltTag</a>
+    </div>
+    """
+    quotes = s.extract_quotes(html, "https://example.com/page/2", depth=0)
+    assert len(quotes) == 1
+    q = quotes[0]
+    assert q.quote == "“Alt quote.”"
+    assert q.author == "Alt Author"
+    assert q.tags == ["AltTag"]
+    assert q.source_html_lang is None or q.source_html_lang == "en"
+
+
+def test_extract_author_fallback():
+    author_html = """
+    <article>
+      <h1>Fallback Author</h1>
+      <p>Born 1901</p>
+      <p>in City, Wonderland</p>
+      <p>Some description.</p>
+    </article>
+    """
+    author = s.extract_author_details(author_html, "https://example.com/author/fallback", depth=1)
+    assert author is not None
+    assert author.name == "Fallback Author"
 
 
 def test_write_quotes_jsonl_idempotent(tmp_path: Path):
