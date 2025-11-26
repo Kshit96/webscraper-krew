@@ -5,6 +5,7 @@ focuses on scraping logic, enrichment assembly, and writing outputs.
 """
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import logging
@@ -14,7 +15,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 from urllib.parse import urljoin, urldefrag, urlparse, urlunparse
 
 import requests
@@ -110,7 +111,13 @@ def extract_links(html: str, base_url: str, allowed_netloc: str | None) -> List[
     return links
 
 
-def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | None = None) -> List[QuoteRecord]:
+def extract_quotes(
+    html: str,
+    page_url: str,
+    depth: int,
+    language_hint: str | None = None,
+    page_title: str | None = None,
+) -> List[QuoteRecord]:
     """Extract quotes, authors, and tags from a page if present."""
     soup = BeautifulSoup(html, "html.parser")
     quotes: List[QuoteRecord] = []
@@ -139,6 +146,7 @@ def extract_quotes(html: str, page_url: str, depth: int, language_hint: str | No
                     position_on_page=idx,
                     source_html_lang=language_hint,
                     source_node_lang=node_lang,
+                    page_title=page_title,
                 )
             )
     return quotes
@@ -173,6 +181,25 @@ def extract_author_details(html: str, page_url: str, depth: int) -> AuthorRecord
     )
 
 
+def extract_page_title(html: str) -> str | None:
+    """Extract the <title> text or first heading as a fallback."""
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.title and soup.title.string:
+        return soup.title.string.strip()
+    heading = soup.find(["h1", "h2"])
+    if heading and heading.get_text():
+        return heading.get_text().strip()
+    meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": "title"})
+    if meta_title and meta_title.get("content"):
+        return meta_title["content"].strip()
+    return None
+
+
+def extract_body_text(html: str) -> str | None:
+    """Deprecated placeholder: previously extracted body text; now unused."""
+    return None
+
+
 def should_skip_url(url: str, skip_keywords: List[str]) -> bool:
     """Return True if URL matches any skip keywords in path/query."""
     parsed = urlparse(url)
@@ -184,7 +211,19 @@ def matches_include_patterns(url: str, patterns: List[str]) -> bool:
     """Return True if URL matches any include pattern; if none provided, allow all."""
     if not patterns:
         return True
-    return any(re.search(pattern, url) for pattern in patterns)
+    for pattern in patterns:
+        try:
+            # Support glob-like patterns as well as regex.
+            if any(ch in pattern for ch in "*?[]"):
+                if fnmatch.fnmatch(url, pattern):
+                    return True
+                continue
+            if re.search(pattern, url):
+                return True
+        except re.error:
+            logging.warning("Skipping invalid include_pattern regex: %s", pattern)
+            continue
+    return False
 
 
 def detect_language_from_html(html: str) -> str | None:
@@ -317,14 +356,24 @@ def resolve_collection_name(configured: str, auto_increment: bool, existing: Lis
 
 
 def parse_collection_name(name: str) -> tuple[str, int]:
-    """Split collection name into base and version, defaulting sensibly."""
+    """Split collection name into base and version, collapsing repeated _v segments.
+
+    Examples:
+        quotes_demo_v1      -> (quotes_demo, 1)
+        quotes_demo         -> (quotes_demo, 1)
+    """
     if not name:
         return "collection", 1
-    match = re.match(r"^(.*)_v(\\d+)$", name)
-    if match:
+    current = name
+    last_version = 1
+    while True:
+        match = re.match(r"^(.*)_v(\d+)$", current)
+        if not match:
+            break
         base = match.group(1) or "collection"
-        return base, int(match.group(2))
-    return name, 1
+        last_version = int(match.group(2))
+        current = base
+    return current, last_version
 
 
 def write_quotes_jsonl(
@@ -336,32 +385,37 @@ def write_quotes_jsonl(
     collection_name: str,
     auto_increment: bool,
 ) -> None:
-    """Write quote records to a JSONL file, merging with any existing entries (idempotent)."""
-    existing = load_existing_records(path)
-    merged: Dict[Tuple[str, str], dict] = {}
+    """Write quote records to a JSONL file using streamed merge to avoid loading everything in memory."""
+    existing_iter: Iterable[dict]
+    existing_iter = load_existing_records(path)
+    existing_map: Dict[Tuple[str, str], dict] = {}
     dedupe_counts: Dict[str, int] = {}
-    for row in existing:
+    for row in existing_iter:
         key = (row.get("quote", ""), row.get("author") or row.get("author_name_raw", ""))
-        merged[key] = row
+        existing_map[key] = row
         dedupe_key_existing = row.get("dedupe_key") or build_dedupe_key(row.get("normalized_text") or row.get("quote", ""))
         if dedupe_key_existing:
             dedupe_counts[dedupe_key_existing] = dedupe_counts.get(dedupe_key_existing, 0) + 1
 
     pipeline = QuoteMetadataPipeline.default()
-    resolved_collection = resolve_collection_name(collection_name, auto_increment, existing)
+    resolved_collection = resolve_collection_name(collection_name, auto_increment, list(existing_map.values()))
     factory = QuoteContextFactory(start_url, scraped_at, resolved_collection, author_lookup, dedupe_counts)
 
+    temp_path = path.with_suffix(".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+
+    with temp_path.open("w", encoding="utf-8") as handle:
         for record in quotes:
             ctx = factory.build(record)
-            merged[(record.quote, record.author)] = pipeline.build(ctx)
+            existing_map[(record.quote, record.author)] = pipeline.build(ctx)
 
-        payloads = list(merged.values())
+        payloads = list(existing_map.values())
         apply_sequence_links(payloads)
         for payload in payloads:
             handle.write(json.dumps(payload))
             handle.write("\n")
+
+    temp_path.replace(path)
 
 
 def write_authors_jsonl(authors: List[AuthorRecord], path: Path, start_url: str, scraped_at: str) -> None:
@@ -434,7 +488,9 @@ def scrape(url: str, config: Config) -> tuple[List[QuoteRecord], List[AuthorReco
             logging.info("Reached max_pages limit (%s); stopping crawl.", config.max_pages)
             break
 
-        if not matches_include_patterns(current_url, config.include_patterns):
+        # Always allow the starting URL; apply include_patterns/follow_include_patterns to discovered links.
+        patterns = config.follow_include_patterns or config.include_patterns
+        if current_url != start_url and not matches_include_patterns(current_url, patterns):
             logging.debug("Skipping %s; does not match include_patterns", current_url)
             continue
 
@@ -451,6 +507,7 @@ def scrape(url: str, config: Config) -> tuple[List[QuoteRecord], List[AuthorReco
 
         try:
             html = fetch_html(current_url, config)
+            logging.info("Fetched %s (depth=%s)", current_url, depth)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response else "unknown"
             retries = retry_counts.get(current_url, 0)
@@ -486,7 +543,9 @@ def scrape(url: str, config: Config) -> tuple[List[QuoteRecord], List[AuthorReco
         links = extract_links(html, current_url, start_netloc)
         # Prefer document-declared language; only fall back to later heuristics if missing.
         doc_lang = detect_language_from_html(html)
-        page_quotes = extract_quotes(html, current_url, depth, doc_lang)
+        page_title = extract_page_title(html)
+        page_quotes = extract_quotes(html, current_url, depth, doc_lang, page_title)
+        logging.info("Extracted %s quotes from %s", len(page_quotes), current_url)
         author_details = extract_author_details(html, current_url, depth)
         quotes.extend(page_quotes)
         if author_details and author_details.source_url not in author_pages_seen:

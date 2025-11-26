@@ -218,3 +218,85 @@ def test_build_author_lookup_and_era(tmp_path: Path):
     assert meta_future["birth_year"] == 2001
     assert meta_future["era"] == "21st_century"
     assert meta_future["country"] == "Futureland"
+
+
+def test_include_patterns_with_invalid_regex():
+    patterns = ["*/tag/*", r"/tag/"]
+    url_ok = "https://example.com/tag/test"
+    url_no = "https://example.com/author/test"
+    assert s.matches_include_patterns(url_ok, patterns) is True
+    assert s.matches_include_patterns(url_no, patterns) is False
+
+
+def test_start_url_always_allowed(tmp_path: Path, monkeypatch):
+    cfg = s.Config(
+        user_agent="ua",
+        http_timeout=5,
+        quotes_output_path=tmp_path / "q.jsonl",
+        author_output_path=tmp_path / "a.jsonl",
+        collection_name="col",
+        crawl_depth=0,
+        request_delay=0,
+        max_pages=1,
+        skip_keywords=[],
+        max_retries=0,
+        include_patterns=[r"/tag/"],
+    )
+
+    # Fake fetch to avoid network
+    def fake_fetch_html(url: str, config: s.Config) -> str:
+        return "<html><body><div class='quote'><span class='text'>\"Q\"</span><small class='author'>A</small></div></body></html>"
+
+    monkeypatch.setattr(s, "fetch_html", fake_fetch_html)
+    quotes, authors = s.scrape("https://example.com", cfg)
+    assert len(quotes) == 1
+
+
+def test_collection_name_auto_increment(tmp_path: Path):
+    # Seed existing file with collection_v1 and ensure next run increments
+    existing = {
+        "quote": "alpha",
+        "author_name_raw": "Author",
+        "collection_name": "demo_v1",
+        "id": "quote-1",
+    }
+    quotes_path = tmp_path / "quotes.jsonl"
+    quotes_path.write_text(json.dumps(existing) + "\n", encoding="utf-8")
+
+    qr = s.QuoteRecord(
+        source_url="https://example.com/page/1",
+        quote="Beta",
+        author="Author",
+        tags=[],
+        depth=0,
+        page_number=1,
+        position_on_page=1,
+    )
+
+    author_lookup = {}
+    scraped_at = "2024-01-01T00:00:00Z"
+    s.write_quotes_jsonl([qr], quotes_path, "https://example.com", scraped_at, author_lookup, "demo_v1", True)
+
+    lines = [json.loads(l) for l in quotes_path.read_text(encoding="utf-8").strip().splitlines()]
+    assert any(row.get("collection_name") == "demo_v2" for row in lines)
+
+
+def test_parse_collection_name_repeated_suffix():
+    base, version = s.parse_collection_name("quotes_demo_v1_v1")
+    assert base == "quotes_demo"
+    assert version == 1
+
+
+def test_extract_page_title_fallbacks():
+    html = """
+    <html><head><title>My Page</title></head><body><h1>Heading</h1></body></html>
+    """
+    assert s.extract_page_title(html) == "My Page"
+    html2 = """
+    <html><head></head><body><h1>Heading Only</h1></body></html>
+    """
+    assert s.extract_page_title(html2) == "Heading Only"
+    html3 = """
+    <html><head><meta property="og:title" content="Meta Title" /></head><body></body></html>
+    """
+    assert s.extract_page_title(html3) == "Meta Title"

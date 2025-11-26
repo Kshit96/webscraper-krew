@@ -27,7 +27,7 @@ def main() -> None:
     start_url = args.url
     config: Config = load_config(args.config)
 
-    logging.basicConfig(level=getattr(logging, config.log_level, logging.INFO), format="%(levelname)s: %(message)s")
+    setup_logging(config.log_level)
     logging.debug("Loaded config from %s", args.config)
     logging.debug("Using User-Agent: %s", config.user_agent)
 
@@ -37,21 +37,24 @@ def main() -> None:
     author_lookup = build_author_lookup(authors, config.author_output_path)
 
     if not quotes and not authors:
-        logging.info(
-            "No quotes or authors found. Writing empty outputs to %s and %s",
-            config.quotes_output_path,
-            config.author_output_path,
-        )
-        write_quotes_jsonl(
-            [],
-            config.quotes_output_path,
-            start_url,
-            scraped_at,
-            author_lookup,
-            config.collection_name,
-            config.auto_increment_collection,
-        )
-        write_authors_jsonl([], config.author_output_path, start_url, scraped_at)
+        if not config.quotes_output_path.exists() and not config.author_output_path.exists():
+            logging.info(
+                "No quotes or authors found. Writing empty outputs to %s and %s",
+                config.quotes_output_path,
+                config.author_output_path,
+            )
+            write_quotes_jsonl(
+                [],
+                config.quotes_output_path,
+                start_url,
+                scraped_at,
+                author_lookup,
+                config.collection_name,
+                config.auto_increment_collection,
+            )
+            write_authors_jsonl([], config.author_output_path, start_url, scraped_at)
+        else:
+            logging.warning("No quotes or authors found; leaving existing output files untouched.")
         return
 
     write_quotes_jsonl(
@@ -71,6 +74,35 @@ def main() -> None:
         len(authors),
         config.author_output_path,
     )
+
+
+def setup_logging(log_level: str, log_file: Path | None = None) -> None:
+    """Configure console + file logging with a consistent formatter."""
+    if log_file is None:
+        log_file = Path("logs/scrape.log")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    level = getattr(logging, log_level.upper(), logging.INFO)
+
+    handlers: list[logging.Handler] = []
+
+    # Keep console quiet (progress bar owns stdout); only surface errors there.
+    console = logging.StreamHandler()
+    console.setLevel(logging.ERROR)
+    console.setFormatter(formatter)
+    handlers.append(console)
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    handlers.append(file_handler)
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(logging.DEBUG)
+    for h in handlers:
+        root.addHandler(h)
 
 
 if __name__ == "__main__":

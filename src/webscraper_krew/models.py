@@ -20,6 +20,7 @@ class Config:
     skip_keywords: List[str] = field(default_factory=lambda: ["login", "signin", "signup", "search", "admin"])
     max_retries: int = 1
     include_patterns: List[str] = field(default_factory=list)
+    follow_include_patterns: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -33,6 +34,7 @@ class QuoteRecord:
     position_on_page: int
     source_html_lang: str | None = None
     source_node_lang: str | None = None
+    page_title: str | None = None
 
 
 @dataclass
@@ -77,3 +79,4 @@ class QuoteContext:
     detected_lang: str | None = None
     detected_lang_confidence: float | None = None
     resolved_lang: str | None = None
+    page_title: str | None = None

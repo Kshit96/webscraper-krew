@@ -44,6 +44,7 @@ class QuoteMetadataPipeline:
             "source_url": r.source_url,
             "start_url": ctx.start_url,
             "source_site": ctx.source_site,
+            "page_title": r.page_title,
             "quote": r.quote,
             "author_name_raw": r.author,
             "author_normalized_id": slugify(r.author),

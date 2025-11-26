@@ -16,5 +16,6 @@
   ],
   "max_retries": 1,
   "include_patterns": [],
+  "follow_include_patterns": [],
   "auto_increment_collection": true
 }

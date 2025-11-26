@@ -1,7 +1,0 @@
-Dataset deduplication - already done (sub linear algorithm) Jaccard similarity or minhash/LSH
-robots.txt
-Get keywords maybe?
-Number of tokens probably -- can be important for training
-Batch size -- can be important for training
-look at hyper parameters
-search

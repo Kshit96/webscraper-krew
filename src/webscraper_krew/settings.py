@@ -25,7 +25,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         - request_delay: float seconds between requests
         - max_pages: int hard cap on pages fetched
         - skip_keywords: list of substrings to skip in URLs
-        - include_patterns: list of regex patterns to allow URLs
+        - include_patterns: list of regex/glob patterns to allow URLs (applied to discovered links if follow patterns are not set)
+        - follow_include_patterns: list of regex/glob patterns applied to discovered links (overrides include_patterns if set)
         - max_retries: int retries per URL
     Raises:
         FileNotFoundError: if the config file is missing.
@@ -93,6 +94,14 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     else:
         raise ValueError("Config include_patterns must be a list of strings")
 
+    follow_patterns_raw = data.get("follow_include_patterns", include_patterns)
+    if follow_patterns_raw is None:
+        follow_include_patterns = []
+    elif isinstance(follow_patterns_raw, list):
+        follow_include_patterns = [str(pat) for pat in follow_patterns_raw if str(pat).strip()]
+    else:
+        raise ValueError("Config follow_include_patterns must be a list of strings")
+
     skip_keywords_raw = data.get("skip_keywords")
     if skip_keywords_raw is None:
         skip_keywords = ["login", "signin", "signup", "search", "admin"]
@@ -116,5 +125,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         skip_keywords=skip_keywords,
         max_retries=max_retries,
         include_patterns=include_patterns,
+        follow_include_patterns=follow_include_patterns,
         auto_increment_collection=bool(data.get("auto_increment_collection", False)),
     )

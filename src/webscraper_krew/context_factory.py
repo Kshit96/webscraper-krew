@@ -33,6 +33,14 @@ class QuoteContextFactory:
         self.dedupe_counts = dedupe_counts
 
     def build(self, record: QuoteRecord) -> QuoteContext:
+        """Assemble a QuoteContext from a raw QuoteRecord.
+
+        Args:
+            record: Raw quote with source URL, text, author, tags, depth, page/position, and language hints.
+        Returns:
+            QuoteContext containing derived text/structural features, author metadata, dedupe info, quality/safety
+            signals, embeddings/keywords/topics, and collection/run metadata ready for the pipeline to emit.
+        """
         text_features = compute_text_features(record.quote)
         # Language resolution: prefer node-level lang, then document lang, else detected heuristic
         source_html_lang = record.source_html_lang
@@ -94,4 +102,5 @@ class QuoteContextFactory:
             detected_lang=detected_lang,
             detected_lang_confidence=detected_conf,
             resolved_lang=resolved_lang,
+            page_title=record.page_title,
         )
